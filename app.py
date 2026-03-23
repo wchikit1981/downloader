@@ -3,80 +3,93 @@ import yt_dlp
 import os
 import glob
 
-# 1. 頁面設定
-st.set_page_config(page_title="YouTube Pro Max Web", page_icon="🚀", layout="wide")
+# 1. 基本頁面設定
+st.set_page_config(page_title="YouTube 下載器", page_icon="📺", layout="wide")
 
-st.title("🚀 YouTube Pro Max (自備 Cookie 版)")
+st.title("📺 YouTube 影音下載工具")
 st.markdown("---")
 
-# --- 2. 側邊欄：Cookie 設定 (讓用家自行輸入) ---
+# --- 2. Cookie 設定區 (側邊欄) ---
 with st.sidebar:
     st.header("🔑 權限設定")
-    st.write("若遇到『機器人驗證』或想下載『私人清單』，請提供 Netscape 格式的 Cookie。")
+    st.info("如需下載私人影片或避開機器人驗證，請在此提供 Cookie。")
     
-    cookie_method = st.radio("提供方式:", ["不使用 (僅限公開影片)", "上傳 .txt 檔案", "直接貼上文字內容"])
+    cookie_input = st.text_area(
+        "貼上 Netscape 格式 Cookie 內容:", 
+        height=250, 
+        placeholder="# Netscape HTTP Cookie File\n..."
+    )
     
-    user_cookies = None
-    if cookie_method == "上傳 .txt 檔案":
-        uploaded_file = st.file_uploader("上傳 youtube_cookies.txt", type="txt")
-        if uploaded_file:
-            # 存為暫存檔
-            with open("temp_cookies.txt", "wb") as f:
-                f.write(uploaded_file.getbuffer())
-            user_cookies = "temp_cookies.txt"
-            
-    elif cookie_method == "直接貼上文字內容":
-        cookie_text = st.text_area("在此貼上 Cookie 內容:", height=200, placeholder="# Netscape HTTP Cookie File...")
-        if cookie_text:
-            with open("temp_cookies.txt", "w", encoding='utf-8') as f:
-                f.write(cookie_text)
-            user_cookies = "temp_cookies.txt"
+    cookie_path = None
+    if cookie_input.strip():
+        cookie_path = "youtube_cookies.txt"
+        with open(cookie_path, "w", encoding='utf-8') as f:
+            f.write(cookie_input)
 
-# --- 3. 主介面：解析與下載 ---
-url = st.text_input("🔗 YouTube 網址:", placeholder="https://...")
-mode = st.radio("🛠️ 格式:", ["最高音質 MP3", "最高畫質 MP4"], horizontal=True)
+# --- 3. 主畫面設定 ---
+url = st.text_input("🔗 YouTube 網址:", placeholder="請貼上影片連結...")
+format_type = st.radio("🛠️ 選擇下載格式:", ["最高音質 MP3", "最高畫質 MP4"], horizontal=True)
 
-if st.button("🔍 獲取資訊"):
+# --- 4. 預覽階段 ---
+if st.button("🔍 獲取影片資訊"):
     if not url:
         st.warning("請先輸入網址")
     else:
-        with st.spinner("解析中..."):
+        with st.spinner("正在解析影片資料..."):
             try:
+                # 預設格式以便估計大小
+                target_fmt = 'bestaudio/best' if "MP3" in format_type else 'bestvideo+bestaudio/best'
                 ydl_opts = {
                     'quiet': True,
                     'nocheckcertificate': True,
-                    'noplaylist': True,
-                    'format': 'bestaudio/best' if "MP3" in mode else 'bestvideo+bestaudio/best'
+                    'format': target_fmt
                 }
-                if user_cookies: ydl_opts['cookiefile'] = user_cookies
+                if cookie_path: ydl_opts['cookiefile'] = cookie_path
 
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                     info = ydl.extract_info(url, download=False)
-                    st.session_state['ready_info'] = info
-                    st.session_state['target_url'] = url
+                    st.session_state['video_info'] = info
+                    st.session_state['download_url'] = url
                     
-                    st.success(f"✅ 找到影片: {info.get('title')}")
-                    filesize = info.get('filesize') or info.get('filesize_approx') or 0
-                    st.info(f"📦 預估大小: {filesize / (1024*1024):.2f} MB")
+                    # 顯示資訊介面
+                    with st.container(border=True):
+                        col1, col2 = st.columns([1, 2])
+                        with col1:
+                            st.image(info.get('thumbnail'), use_container_width=True)
+                        with col2:
+                            st.subheader(info.get('title'))
+                            st.write(f"👤 上傳者: {info.get('uploader')}")
+                            st.write(f"⏰ 影片時長: {info.get('duration')//60}分{info.get('duration')%60}秒")
+                            
+                            # 大小計算
+                            size = info.get('filesize') or info.get('filesize_approx') or 0
+                            if size > 0:
+                                st.success(f"📦 預估檔案大小: {size / (1024*1024):.2f} MB")
+                            else:
+                                st.info("📦 預估檔案大小: 無法預計")
+
             except Exception as e:
-                st.error(f"解析失敗: {str(e)}")
+                st.error(f"解析失敗，請檢查網址或 Cookie: {str(e)}")
 
-# --- 4. 執行下載 ---
-if st.session_state.get('ready_info'):
-    if st.button("🚀 下載並存入手機/電腦"):
-        with st.spinner("轉檔中，請稍候..."):
+# --- 5. 下載與儲存階段 ---
+if st.session_state.get('video_info'):
+    if st.button("🚀 開始下載到裝置"):
+        with st.spinner("正在下載並轉檔，請稍候..."):
             try:
-                # 清理
-                for f in glob.glob("web_out.*"): os.remove(f)
+                # 清除舊的暫存檔案
+                for f in glob.glob("temp_video.*") + glob.glob("temp_audio.*"):
+                    try: os.remove(f)
+                    except: pass
                 
-                output_name = "web_out"
+                output_filename = "download_file"
                 ydl_opts = {
-                    'outtmpl': f'{output_name}.%(ext)s',
+                    'outtmpl': f'{output_filename}.%(ext)s',
                     'nocheckcertificate': True,
+                    'noplaylist': True,
                 }
-                if user_cookies: ydl_opts['cookiefile'] = user_cookies
+                if cookie_path: ydl_opts['cookiefile'] = cookie_path
 
-                if "MP3" in mode:
+                if "MP3" in format_type:
                     ydl_opts.update({
                         'format': 'bestaudio/best',
                         'postprocessors': [{'key': 'FFmpegExtractAudio','preferredcodec': 'mp3','preferredquality': '0'}]
@@ -87,15 +100,18 @@ if st.session_state.get('ready_info'):
                     ext = "mp4"
 
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                    ydl.download([st.session_state['target_url']])
+                    ydl.download([st.session_state['download_url']])
                 
-                # 提供下載按鈕
-                with open(f"{output_name}.{ext}", "rb") as f:
-                    st.download_button(
-                        label="📥 點擊儲存檔案",
-                        data=f,
-                        file_name=f"{st.session_state['ready_info'].get('title')}.{ext}",
-                        mime="audio/mpeg" if ext=="mp3" else "video/mp4"
-                    )
+                # 最終提供檔案下載
+                final_file = f"{output_filename}.{ext}"
+                if os.path.exists(final_file):
+                    with open(final_file, "rb") as f:
+                        st.balloons()
+                        st.download_button(
+                            label="📥 點擊此處儲存檔案",
+                            data=f,
+                            file_name=f"{st.session_state['video_info'].get('title')}.{ext}",
+                            mime="audio/mpeg" if ext=="mp3" else "video/mp4"
+                        )
             except Exception as e:
-                st.error(f"下載出錯: {e}")
+                st.error(f"下載過程中發生錯誤: {e}")
